@@ -1,8 +1,12 @@
 use pulp::{Scalar, Simd};
 
+/// Value representing the implicit sum of two floating point terms, such that the absolute value of
+/// the second term is less half a ULP of the first term.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Double<T>(pub T, pub T);
 
+/// Value representing the implicit sum of four floating point terms, such that the absolute value of
+/// each term is less half a ULP of the previous term.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Quad<T>(pub T, pub T, pub T, pub T);
 
