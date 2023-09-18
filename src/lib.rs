@@ -554,6 +554,15 @@ mod faer_impl {
 
     impl RealField for Double<f64> {
         #[inline(always)]
+        fn epsilon() -> Option<Self> {
+            Some(Self::EPSILON)
+        }
+        #[inline(always)]
+        fn zero_threshold() -> Option<Self> {
+            Some(Self::MIN_POSITIVE)
+        }
+
+        #[inline(always)]
         fn div(&self, rhs: &Self) -> Self {
             *self / *rhs
         }

@@ -11,7 +11,7 @@ keywords = ["math", "floating-point", "precision"]
 
 [dependencies]
 pulp = "0.13"
-faer-core = { version = "0.9.1", optional = true }
+faer-core = { version = "0.10.0", optional = true, path = "../faer-rs/faer-core/" }
 
 [features]
 default = ["faer"]
