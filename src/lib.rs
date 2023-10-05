@@ -1,14 +1,18 @@
+// https://web.mit.edu/tabbott/Public/quaddouble-debian/qd-2.3.4-old/docs/qd.pdf
+// https://gitlab.com/hodge_star/mantis
+
+use bytemuck::Pod;
+use bytemuck::Zeroable;
 use pulp::{Scalar, Simd};
 
 /// Value representing the implicit sum of two floating point terms, such that the absolute value of
 /// the second term is less half a ULP of the first term.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(C)]
 pub struct Double<T>(pub T, pub T);
 
-/// Value representing the implicit sum of four floating point terms, such that the absolute value of
-/// each term is less half a ULP of the previous term.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Quad<T>(pub T, pub T, pub T, pub T);
+unsafe impl<T: Zeroable> Zeroable for Double<T> {}
+unsafe impl<T: Pod> Pod for Double<T> {}
 
 impl<I: Iterator> Iterator for Double<I> {
     type Item = Double<I::Item>;
@@ -18,19 +22,6 @@ impl<I: Iterator> Iterator for Double<I> {
         let x0 = self.0.next()?;
         let x1 = self.1.next()?;
         Some(Double(x0, x1))
-    }
-}
-
-impl<I: Iterator> Iterator for Quad<I> {
-    type Item = Quad<I::Item>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        let x0 = self.0.next()?;
-        let x1 = self.1.next()?;
-        let x2 = self.2.next()?;
-        let x3 = self.3.next()?;
-        Some(Quad(x0, x1, x2, x3))
     }
 }
 
@@ -177,7 +168,7 @@ pub mod double {
                 let s2 = simd.f64s_add(s2, a.1);
 
                 let q2 = simd.f64s_div(simd.f64s_add(s1, s2), b.0);
-                let (r0, r1) = quick_two_sum(simd, q1, q2);
+                let (q0, q1) = quick_two_sum(simd, q1, q2);
 
                 simd_select(
                     simd,
@@ -193,7 +184,7 @@ pub mod double {
                             simd.f64s_or(combined_sign, pos_zero),
                             simd.f64s_or(combined_sign, pos_zero),
                         ),
-                        Double(r0, r1),
+                        Double(q0, q1),
                     ),
                 )
             },
@@ -344,24 +335,6 @@ impl Double<f64> {
     pub const LN_2: Self = Self(core::f64::consts::LN_2, 2.3190468138462996e-17);
     pub const LN_10: Self = Self(core::f64::consts::LN_10, -2.1707562233822494e-16);
 
-    const INV_FACT: [Self; 15] = [
-        Self(1.66666666666666657e-01, 9.25185853854297066e-18),
-        Self(4.16666666666666644e-02, 2.31296463463574266e-18),
-        Self(8.33333333333333322e-03, 1.15648231731787138e-19),
-        Self(1.38888888888888894e-03, -5.30054395437357706e-20),
-        Self(1.98412698412698413e-04, 1.72095582934207053e-22),
-        Self(2.48015873015873016e-05, 2.15119478667758816e-23),
-        Self(2.75573192239858925e-06, -1.85839327404647208e-22),
-        Self(2.75573192239858883e-07, 2.37677146222502973e-23),
-        Self(2.50521083854417202e-08, -1.44881407093591197e-24),
-        Self(2.08767569878681002e-09, -1.20734505911325997e-25),
-        Self(1.60590438368216133e-10, 1.25852945887520981e-26),
-        Self(1.14707455977297245e-11, 2.06555127528307454e-28),
-        Self(7.64716373181981641e-13, 7.03872877733453001e-30),
-        Self(4.77947733238738525e-14, 4.39920548583408126e-31),
-        Self(2.81145725434552060e-15, 1.65088427308614326e-31),
-    ];
-
     #[inline(always)]
     pub fn abs(self) -> Self {
         double::simd_abs(Scalar::new(), self)
@@ -388,86 +361,12 @@ impl Double<f64> {
             ax + (a - ax * ax) * Double(x * 0.5, 0.0)
         }
     }
-
-    #[inline]
-    pub fn exp(self) -> Self {
-        const K: f64 = 512.0;
-        const INV_K: f64 = 1.0 / K;
-
-        let a = self;
-        if a.0 <= -709.0 {
-            return Self::ZERO;
-        }
-        if a.0 >= 709.0 {
-            return Self::INFINITY;
-        }
-        if a.0 == 0.0 {
-            return Self(1.0, 0.0);
-        }
-
-        let m = (a.0 / Self::LN_2.0 + 0.5).floor();
-        let r = a - Self::LN_2 * Self(m, 0.0);
-        let r = Self(r.0 * INV_K, r.1 * INV_K);
-
-        let p = r * r;
-        let mut s = r + Self(p.0 * 0.5, p.1 * 0.5);
-        let mut p = p * r;
-
-        let mut t = p * Self::INV_FACT[0];
-        let mut i = 0;
-        loop {
-            s += t;
-            p *= r;
-            i += 1;
-
-            t = p * Self::INV_FACT[i];
-            if !(t.0.abs() > INV_K * Self::EPSILON.0 && i < 5) {
-                break;
-            }
-        }
-
-        s += t;
-
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-        s = Self(s.0 * 2.0, s.1 * 2.0) + s * s;
-
-        s += Self(1.0, 0.0);
-
-        let factor = 2.0f64.powi(m as i32);
-        Self(s.0 * factor, s.1 * factor)
-    }
-
-    #[inline]
-    pub fn ln(self) -> Self {
-        if self == Self(1.0, 0.0) {
-            Self::ZERO
-        } else if self <= Self::ZERO {
-            Self::NAN
-        } else {
-            let a = self;
-            let x = Self(a.0.log(core::f64::consts::E), 0.0);
-
-            x + a * (-x).exp() - Self(1.0, 0.0)
-        }
-    }
-
-    #[inline]
-    pub fn log2(self) -> Self {
-        self.ln() / Self::LN_2
-    }
 }
 
 #[cfg(feature = "faer")]
 mod faer_impl {
     use super::*;
-    use faer_core::{ComplexField, Conjugate, Entity, RealField};
+    use faer_entity::{ComplexField, Conjugate, Entity, RealField};
 
     type SimdGroup<E, S> = <E as Entity>::Group<<E as Entity>::SimdUnit<S>>;
 
@@ -481,11 +380,9 @@ mod faer_impl {
 
         type Group<T> = Double<T>;
         type GroupCopy<T: Copy> = Double<T>;
-        type GroupThreadSafe<T: Send + Sync> = Double<T>;
         type Iter<I: Iterator> = Double<I>;
 
         const N_COMPONENTS: usize = 2;
-        const HAS_SIMD: bool = true;
         const UNIT: Self::GroupCopy<()> = Double((), ());
 
         #[inline(always)]
@@ -563,8 +460,8 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn div(&self, rhs: &Self) -> Self {
-            *self / *rhs
+        fn div(self, rhs: Self) -> Self {
+            self / rhs
         }
 
         #[inline(always)]
@@ -661,10 +558,12 @@ mod faer_impl {
 
     impl ComplexField for Double<f64> {
         type Real = Double<f64>;
+        type Simd = pulp::Arch;
+        type ScalarSimd = pulp::Arch;
 
         #[inline(always)]
-        fn sqrt(&self) -> Self {
-            (*self).sqrt()
+        fn sqrt(self) -> Self {
+            self.sqrt()
         }
 
         #[inline(always)]
@@ -673,58 +572,58 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn add(&self, rhs: &Self) -> Self {
-            *self + *rhs
+        fn add(self, rhs: Self) -> Self {
+            self + rhs
         }
 
         #[inline(always)]
-        fn sub(&self, rhs: &Self) -> Self {
-            *self - *rhs
+        fn sub(self, rhs: Self) -> Self {
+            self - rhs
         }
 
         #[inline(always)]
-        fn mul(&self, rhs: &Self) -> Self {
-            *self * *rhs
+        fn mul(self, rhs: Self) -> Self {
+            self * rhs
         }
 
         #[inline(always)]
-        fn neg(&self) -> Self {
-            -*self
+        fn neg(self) -> Self {
+            -self
         }
 
         #[inline(always)]
-        fn inv(&self) -> Self {
-            (*self).recip()
+        fn inv(self) -> Self {
+            self.recip()
         }
 
         #[inline(always)]
-        fn conj(&self) -> Self {
-            *self
+        fn conj(self) -> Self {
+            self
         }
 
         #[inline(always)]
-        fn scale_real(&self, rhs: &Self::Real) -> Self {
-            *self * *rhs
+        fn scale_real(self, rhs: Self::Real) -> Self {
+            self * rhs
         }
 
         #[inline(always)]
-        fn scale_power_of_two(&self, rhs: &Self::Real) -> Self {
+        fn scale_power_of_two(self, rhs: Self::Real) -> Self {
             Self(self.0 * rhs.0, self.1 * rhs.0)
         }
 
         #[inline(always)]
-        fn score(&self) -> Self::Real {
-            (*self).abs()
+        fn score(self) -> Self::Real {
+            self.abs()
         }
 
         #[inline(always)]
-        fn abs(&self) -> Self::Real {
-            (*self).abs()
+        fn abs(self) -> Self::Real {
+            self.abs()
         }
 
         #[inline(always)]
-        fn abs2(&self) -> Self::Real {
-            *self * *self
+        fn abs2(self) -> Self::Real {
+            self * self
         }
 
         #[inline(always)]
@@ -738,12 +637,12 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn real(&self) -> Self::Real {
-            *self
+        fn real(self) -> Self::Real {
+            self
         }
 
         #[inline(always)]
-        fn imag(&self) -> Self::Real {
+        fn imag(self) -> Self::Real {
             Self::ZERO
         }
 
@@ -758,29 +657,24 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn slice_as_simd<S: faer_core::pulp::Simd>(
-            slice: &[Self::Unit],
-        ) -> (&[Self::SimdUnit<S>], &[Self::Unit]) {
+        fn slice_as_simd<S: Simd>(slice: &[Self::Unit]) -> (&[Self::SimdUnit<S>], &[Self::Unit]) {
             S::f64s_as_simd(slice)
         }
 
         #[inline(always)]
-        fn slice_as_mut_simd<S: faer_core::pulp::Simd>(
+        fn slice_as_mut_simd<S: Simd>(
             slice: &mut [Self::Unit],
         ) -> (&mut [Self::SimdUnit<S>], &mut [Self::Unit]) {
             S::f64s_as_mut_simd(slice)
         }
 
         #[inline(always)]
-        fn partial_load_unit<S: faer_core::pulp::Simd>(
-            simd: S,
-            slice: &[Self::Unit],
-        ) -> Self::SimdUnit<S> {
+        fn partial_load_unit<S: Simd>(simd: S, slice: &[Self::Unit]) -> Self::SimdUnit<S> {
             simd.f64s_partial_load(slice)
         }
 
         #[inline(always)]
-        fn partial_store_unit<S: faer_core::pulp::Simd>(
+        fn partial_store_unit<S: Simd>(
             simd: S,
             slice: &mut [Self::Unit],
             values: Self::SimdUnit<S>,
@@ -789,15 +683,12 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn partial_load_last_unit<S: faer_core::pulp::Simd>(
-            simd: S,
-            slice: &[Self::Unit],
-        ) -> Self::SimdUnit<S> {
+        fn partial_load_last_unit<S: Simd>(simd: S, slice: &[Self::Unit]) -> Self::SimdUnit<S> {
             simd.f64s_partial_load_last(slice)
         }
 
         #[inline(always)]
-        fn partial_store_last_unit<S: faer_core::pulp::Simd>(
+        fn partial_store_last_unit<S: Simd>(
             simd: S,
             slice: &mut [Self::Unit],
             values: Self::SimdUnit<S>,
@@ -806,32 +697,23 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_splat_unit<S: faer_core::pulp::Simd>(
-            simd: S,
-            unit: Self::Unit,
-        ) -> Self::SimdUnit<S> {
+        fn simd_splat_unit<S: Simd>(simd: S, unit: Self::Unit) -> Self::SimdUnit<S> {
             simd.f64s_splat(unit)
         }
 
         #[inline(always)]
-        fn simd_neg<S: faer_core::pulp::Simd>(
-            simd: S,
-            values: SimdGroup<Self, S>,
-        ) -> SimdGroup<Self, S> {
+        fn simd_neg<S: Simd>(simd: S, values: SimdGroup<Self, S>) -> SimdGroup<Self, S> {
             double::simd_neg(simd, values)
         }
 
         #[inline(always)]
-        fn simd_conj<S: faer_core::pulp::Simd>(
-            simd: S,
-            values: SimdGroup<Self, S>,
-        ) -> SimdGroup<Self, S> {
+        fn simd_conj<S: Simd>(simd: S, values: SimdGroup<Self, S>) -> SimdGroup<Self, S> {
             let _ = simd;
             values
         }
 
         #[inline(always)]
-        fn simd_add<S: faer_core::pulp::Simd>(
+        fn simd_add<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -840,7 +722,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_sub<S: faer_core::pulp::Simd>(
+        fn simd_sub<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -849,7 +731,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_mul<S: faer_core::pulp::Simd>(
+        fn simd_mul<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -858,7 +740,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_scale_real<S: faer_core::pulp::Simd>(
+        fn simd_scale_real<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -867,7 +749,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_conj_mul<S: faer_core::pulp::Simd>(
+        fn simd_conj_mul<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -876,7 +758,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_mul_adde<S: faer_core::pulp::Simd>(
+        fn simd_mul_adde<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -886,7 +768,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn simd_conj_mul_adde<S: faer_core::pulp::Simd>(
+        fn simd_conj_mul_adde<S: Simd>(
             simd: S,
             lhs: SimdGroup<Self, S>,
             rhs: SimdGroup<Self, S>,
@@ -912,6 +794,30 @@ mod faer_impl {
         #[inline(always)]
         fn simd_abs2<S: Simd>(simd: S, values: SimdGroup<Self, S>) -> SimdGroup<Self::Real, S> {
             Self::simd_mul(simd, values, values)
+        }
+
+        #[inline(always)]
+        fn simd_scalar_mul<S: Simd>(simd: S, lhs: Self, rhs: Self) -> Self {
+            let _ = simd;
+            lhs * rhs
+        }
+
+        #[inline(always)]
+        fn simd_scalar_conj_mul<S: Simd>(simd: S, lhs: Self, rhs: Self) -> Self {
+            let _ = simd;
+            lhs * rhs
+        }
+
+        #[inline(always)]
+        fn simd_scalar_mul_adde<S: Simd>(simd: S, lhs: Self, rhs: Self, acc: Self) -> Self {
+            let _ = simd;
+            lhs * rhs + acc
+        }
+
+        #[inline(always)]
+        fn simd_scalar_conj_mul_adde<S: Simd>(simd: S, lhs: Self, rhs: Self, acc: Self) -> Self {
+            let _ = simd;
+            lhs * rhs + acc
         }
     }
 }
@@ -974,32 +880,24 @@ mod tests {
             let mul_rug = Float::with_val(PREC, &x * &y);
             let div_rug = Float::with_val(PREC, &x / &y);
             let sqrt_rug = Float::with_val(PREC, x.clone().abs().sqrt());
-            let exp_rug = Float::with_val(PREC, (x.clone() * 4.0f64).exp());
-            let ln_rug = Float::with_val(PREC, x.clone().abs().ln());
 
             let add = from_rug(&x) + from_rug(&y);
             let sub = from_rug(&x) - from_rug(&y);
             let mul = from_rug(&x) * from_rug(&y);
             let div = from_rug(&x) / from_rug(&y);
             let sqrt = from_rug(&x).abs().sqrt();
-            let exp = (from_rug(&x) * Double(4.0, 0.0)).exp();
-            let ln = from_rug(&x).abs().ln();
 
             let err_add = from_rug(&Float::with_val(PREC, &add_rug - to_rug(add))).abs();
             let err_sub = from_rug(&Float::with_val(PREC, &sub_rug - to_rug(sub))).abs();
             let err_mul = from_rug(&Float::with_val(PREC, &mul_rug - to_rug(mul))).abs();
             let err_div = from_rug(&Float::with_val(PREC, &div_rug - to_rug(div))).abs();
             let err_sqrt = from_rug(&Float::with_val(PREC, &sqrt_rug - to_rug(sqrt))).abs();
-            let err_exp = from_rug(&Float::with_val(PREC, &exp_rug - to_rug(exp))).abs();
-            let err_ln = from_rug(&Float::with_val(PREC, &ln_rug - to_rug(ln))).abs();
 
             assert!(err_add / add.abs() < Double::EPSILON);
             assert!(err_sub / sub.abs() < Double::EPSILON);
             assert!(err_mul / mul.abs() < Double::EPSILON);
             assert!(err_div / div.abs() < Double::EPSILON);
             assert!(err_sqrt / sqrt.abs() < Double::EPSILON);
-            assert!(err_exp / exp.abs() < Double::EPSILON);
-            assert!(err_ln / ln.abs() < Double::EPSILON);
         }
     }
 }
