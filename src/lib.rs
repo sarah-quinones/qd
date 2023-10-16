@@ -364,7 +364,6 @@ impl ForCopyType for DoubleGroup {
 
 mod faer_impl {
     use super::*;
-    use faer_entity::*;
 
     unsafe impl Entity for Double<f64> {
         type Unit = f64;
