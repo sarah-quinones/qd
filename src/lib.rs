@@ -1,5 +1,6 @@
 // https://web.mit.edu/tabbott/Public/quaddouble-debian/qd-2.3.4-old/docs/qd.pdf
 // https://gitlab.com/hodge_star/mantis
+#![cfg_attr(not(feature = "std"), no_std)]
 
 use bytemuck::{Pod, Zeroable};
 use faer_entity::*;
@@ -11,8 +12,16 @@ use pulp::{Scalar, Simd};
 #[repr(C)]
 pub struct Double<T>(pub T, pub T);
 
+/// Value representing the implicit sum of two floating point terms, such that the absolute
+/// value of the second term is less half a ULP of the first term.
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+#[allow(non_camel_case_types)]
+pub struct f128(pub f64, pub f64);
+
 unsafe impl<T: Zeroable> Zeroable for Double<T> {}
 unsafe impl<T: Pod> Pod for Double<T> {}
+unsafe impl Zeroable for f128 {}
+unsafe impl Pod for f128 {}
 
 impl<I: Iterator> Iterator for Double<I> {
     type Item = Double<I::Item>;
@@ -237,6 +246,59 @@ pub mod double {
         let eq1 = simd.f64s_equal(a.1, b.1);
         simd.m64s_and(eq0, eq1)
     }
+
+    #[inline(always)]
+    pub fn unpack<S: Simd>(simd: S, packed: Double<S::f64s>) -> Double<S::f64s> {
+        let size = core::mem::size_of::<S::f64s>() / core::mem::size_of::<f64>();
+        let _ = simd;
+        match size {
+            1 => packed,
+            2 => {
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                if core::any::TypeId::of::<S>() == core::any::TypeId::of::<pulp::x86::V2>() {
+                    let simd = unsafe { pulp::x86::V2::new_unchecked() };
+                    let a: pulp::f64x2 = bytemuck::cast(packed.0);
+                    let b: pulp::f64x2 = bytemuck::cast(packed.1);
+                    let ab_lo = simd.sse2._mm_unpacklo_pd(pulp::cast(a), pulp::cast(b));
+                    let ab_hi = simd.sse2._mm_unpackhi_pd(pulp::cast(a), pulp::cast(b));
+                    return bytemuck::cast([ab_lo, ab_hi]);
+                }
+                {
+                    let a: [f64; 2] = bytemuck::cast(packed.0);
+                    let b: [f64; 2] = bytemuck::cast(packed.1);
+                    bytemuck::cast([[a[0], b[0]], [a[1], b[1]]])
+                }
+            }
+            4 => {
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                if core::any::TypeId::of::<S>() == core::any::TypeId::of::<pulp::x86::V3>() {
+                    let simd = unsafe { pulp::x86::V3::new_unchecked() };
+                    let a: pulp::f64x4 = bytemuck::cast(packed.0);
+                    let b: pulp::f64x4 = bytemuck::cast(packed.1);
+                    let ab_lo = simd.avx._mm256_unpacklo_pd(pulp::cast(a), pulp::cast(b));
+                    let ab_hi = simd.avx._mm256_unpackhi_pd(pulp::cast(a), pulp::cast(b));
+                    return bytemuck::cast([ab_lo, ab_hi]);
+                }
+                let a: [f64; 4] = bytemuck::cast(packed.0);
+                let b: [f64; 4] = bytemuck::cast(packed.1);
+                bytemuck::cast([[a[0], b[0], a[2], b[2]], [a[1], b[1], a[3], b[3]]])
+            }
+            8 => {
+                let a: [f64; 8] = bytemuck::cast(packed.0);
+                let b: [f64; 8] = bytemuck::cast(packed.1);
+                bytemuck::cast([
+                    [a[0], b[0], a[2], b[2], a[4], b[4], a[6], b[6]],
+                    [a[1], b[1], a[3], b[3], a[5], b[5], a[7], b[7]],
+                ])
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn pack<S: Simd>(simd: S, unpacked: Double<S::f64s>) -> Double<S::f64s> {
+        unpack(simd, unpacked)
+    }
 }
 
 impl core::ops::Add for Double<f64> {
@@ -361,6 +423,9 @@ impl ForType for DoubleGroup {
 impl ForCopyType for DoubleGroup {
     type FaerOfCopy<T: Copy> = Double<T>;
 }
+impl ForDebugType for DoubleGroup {
+    type FaerOfDebug<T: core::fmt::Debug> = Double<T>;
+}
 
 mod faer_impl {
     use super::*;
@@ -376,8 +441,18 @@ mod faer_impl {
         type Group = DoubleGroup;
         type Iter<I: Iterator> = Double<I>;
 
+        type PrefixUnit<'a, S: Simd> = pulp::Prefix<'a, f64, S, S::m64s>;
+        type SuffixUnit<'a, S: Simd> = pulp::Suffix<'a, f64, S, S::m64s>;
+        type PrefixMutUnit<'a, S: Simd> = pulp::PrefixMut<'a, f64, S, S::m64s>;
+        type SuffixMutUnit<'a, S: Simd> = pulp::SuffixMut<'a, f64, S, S::m64s>;
+
         const N_COMPONENTS: usize = 2;
         const UNIT: GroupCopyFor<Self, ()> = Double((), ());
+
+        #[inline(always)]
+        fn faer_first<T>(group: GroupFor<Self, T>) -> T {
+            group.0
+        }
 
         #[inline(always)]
         fn faer_from_units(group: GroupFor<Self, Self::Unit>) -> Self {
@@ -397,6 +472,16 @@ mod faer_impl {
         #[inline(always)]
         fn faer_as_mut<T>(group: &mut GroupFor<Self, T>) -> GroupFor<Self, &mut T> {
             Double(&mut group.0, &mut group.1)
+        }
+
+        #[inline(always)]
+        fn faer_as_ptr<T>(group: *mut GroupFor<Self, T>) -> GroupFor<Self, *mut T> {
+            unsafe {
+                Double(
+                    core::ptr::addr_of_mut!((*group).0),
+                    core::ptr::addr_of_mut!((*group).1),
+                )
+            }
         }
 
         #[inline(always)]
@@ -556,12 +641,47 @@ mod faer_impl {
         ) -> Self::SimdIndex<S> {
             simd.u64s_add(a, b)
         }
+
+        #[inline(always)]
+        fn faer_min_positive() -> Self {
+            Self::MIN_POSITIVE
+        }
+
+        #[inline(always)]
+        fn faer_min_positive_inv() -> Self {
+            Self::MIN_POSITIVE.recip()
+        }
+
+        #[inline(always)]
+        fn faer_min_positive_sqrt() -> Self {
+            Self::MIN_POSITIVE.sqrt()
+        }
+
+        #[inline(always)]
+        fn faer_min_positive_sqrt_inv() -> Self {
+            Self::MIN_POSITIVE.sqrt().recip()
+        }
+
+        #[inline(always)]
+        fn faer_simd_index_rotate_left<S: Simd>(
+            simd: S,
+            values: SimdIndexFor<Self, S>,
+            amount: usize,
+        ) -> SimdIndexFor<Self, S> {
+            simd.u64s_rotate_left(values, amount)
+        }
+
+        #[inline(always)]
+        fn faer_simd_abs<S: Simd>(simd: S, values: SimdGroupFor<Self, S>) -> SimdGroupFor<Self, S> {
+            double::simd_abs(simd, values)
+        }
     }
 
     impl ComplexField for Double<f64> {
         type Real = Double<f64>;
         type Simd = pulp::Arch;
         type ScalarSimd = pulp::Arch;
+        type PortableSimd = pulp::Arch;
 
         #[inline(always)]
         fn faer_sqrt(self) -> Self {
@@ -666,7 +786,7 @@ mod faer_impl {
         }
 
         #[inline(always)]
-        fn faer_slice_as_mut_simd<S: Simd>(
+        fn faer_slice_as_simd_mut<S: Simd>(
             slice: &mut [Self::Unit],
         ) -> (&mut [Self::SimdUnit<S>], &mut [Self::Unit]) {
             S::f64s_as_mut_simd(slice)
@@ -839,6 +959,52 @@ mod faer_impl {
         ) -> Self {
             let _ = simd;
             lhs * rhs + acc
+        }
+
+        #[inline(always)]
+        fn faer_slice_as_aligned_simd<S: Simd>(
+            simd: S,
+            slice: &[UnitFor<Self>],
+            offset: pulp::Offset<SimdMaskFor<Self, S>>,
+        ) -> (
+            pulp::Prefix<'_, UnitFor<Self>, S, SimdMaskFor<Self, S>>,
+            &[SimdUnitFor<Self, S>],
+            pulp::Suffix<'_, UnitFor<Self>, S, SimdMaskFor<Self, S>>,
+        ) {
+            simd.f64s_as_aligned_simd(slice, offset)
+        }
+        #[inline(always)]
+        fn faer_slice_as_aligned_simd_mut<S: Simd>(
+            simd: S,
+            slice: &mut [UnitFor<Self>],
+            offset: pulp::Offset<SimdMaskFor<Self, S>>,
+        ) -> (
+            pulp::PrefixMut<'_, UnitFor<Self>, S, SimdMaskFor<Self, S>>,
+            &mut [SimdUnitFor<Self, S>],
+            pulp::SuffixMut<'_, UnitFor<Self>, S, SimdMaskFor<Self, S>>,
+        ) {
+            simd.f64s_as_aligned_mut_simd(slice, offset)
+        }
+
+        #[inline(always)]
+        fn faer_simd_rotate_left<S: Simd>(
+            simd: S,
+            values: SimdGroupFor<Self, S>,
+            amount: usize,
+        ) -> SimdGroupFor<Self, S> {
+            Double(
+                simd.f64s_rotate_left(values.0, amount),
+                simd.f64s_rotate_left(values.1, amount),
+            )
+        }
+
+        #[inline(always)]
+        fn faer_align_offset<S: Simd>(
+            simd: S,
+            ptr: *const UnitFor<Self>,
+            len: usize,
+        ) -> pulp::Offset<SimdMaskFor<Self, S>> {
+            simd.f64s_align_offset(ptr, len)
         }
     }
 }
