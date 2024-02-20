@@ -5,23 +5,19 @@
 use bytemuck::{Pod, Zeroable};
 use pulp::{Scalar, Simd};
 
+#[cfg(not(feature = "std"))]
+use libm::Libm;
+
 /// Value representing the implicit sum of two floating point terms, such that the absolute
 /// value of the second term is less half a ULP of the first term.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 pub struct Double<T>(pub T, pub T);
 
-/// Value representing the implicit sum of two floating point terms, such that the absolute
-/// value of the second term is less half a ULP of the first term.
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-#[allow(non_camel_case_types)]
-#[doc(hidden)]
-pub struct f128(pub f64, pub f64);
+pub struct Pow2(pub f64);
 
 unsafe impl<T: Zeroable> Zeroable for Double<T> {}
 unsafe impl<T: Pod> Pod for Double<T> {}
-unsafe impl Zeroable for f128 {}
-unsafe impl Pod for f128 {}
 
 impl<I: Iterator> Iterator for Double<I> {
     type Item = Double<I::Item>;
@@ -329,6 +325,23 @@ impl core::ops::Mul for Double<f64> {
     }
 }
 
+impl core::ops::Mul<Pow2> for Double<f64> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn mul(self, rhs: Pow2) -> Self::Output {
+        Self(self.0 * rhs.0, self.1 * rhs.0)
+    }
+}
+impl core::ops::Mul<Double<f64>> for Pow2 {
+    type Output = Double<f64>;
+
+    #[inline(always)]
+    fn mul(self, rhs: Double<f64>) -> Self::Output {
+        Double(self.0 * rhs.0, self.0 * rhs.1)
+    }
+}
+
 impl core::ops::Div for Double<f64> {
     type Output = Self;
 
@@ -387,7 +400,11 @@ impl Double<f64> {
     pub const NAN: Self = Self(f64::NAN, f64::NAN);
     pub const INFINITY: Self = Self(f64::INFINITY, f64::INFINITY);
     pub const NEG_INFINITY: Self = Self(-f64::INFINITY, -f64::INFINITY);
+
     pub const LN_2: Self = Self(0.6931471805599453, 2.3190468138462996e-17);
+    pub const FRAC_1_LN_2: Self = Self(1.4426950408889634, 2.0355273740931033e-17);
+    pub const LN_10: Self = Self(2.302585092994046, -2.1707562233822494e-16);
+    pub const FRAC_1_LN_10: Self = Self(0.4342944819032518, 1.098319650216765e-17);
 
     #[inline(always)]
     pub fn abs(self) -> Self {
@@ -408,11 +425,7 @@ impl Double<f64> {
         } else {
             let a = self;
 
-            #[cfg(feature = "std")]
             let x = a.0.sqrt().recip();
-            #[cfg(not(feature = "std"))]
-            let x = libm::sqrt(a.0).recip();
-
             let ax = Self(a.0 * x, 0.0);
 
             ax + (a - ax * ax) * Self(x * 0.5, 0.0)
@@ -432,10 +445,7 @@ impl Double<f64> {
             return Self(1.0, 0.0);
         }
 
-        #[cfg(feature = "std")]
         let shift = (value.0 / Self::LN_2.0 + 0.5).floor();
-        #[cfg(not(feature = "std"))]
-        let shift = libm::floor(value.0 / Self::LN_2.0 + 0.5);
 
         let digits = Self::MANTISSA_DIGITS;
         let num_squares = 9;
@@ -444,11 +454,10 @@ impl Double<f64> {
         let scale = (1u32 << num_squares) as f64;
         let inv_scale = scale.recip();
 
-        let r = value - Self::LN_2 * Self(shift, 0.0);
-        let r = Self(r.0 * inv_scale, r.1 * inv_scale);
+        let r = (value - Self::LN_2 * Self(shift, 0.0)) * Pow2(inv_scale);
 
         let mut r_power = r * r;
-        let mut iterate = r + Self(r_power.0 * 0.5, r_power.1 * 0.5);
+        let mut iterate = r + r_power * Pow2(0.5);
 
         r_power *= r;
 
@@ -464,19 +473,19 @@ impl Double<f64> {
             term = coefficient * r_power;
             iterate += term;
 
-            if libm::fabs(term.0) <= tolerance {
+            if term.0.abs() <= tolerance {
                 break;
             }
         }
 
         for _ in 0..num_squares {
-            iterate = iterate * iterate + Self(iterate.0 * 2.0, iterate.1 * 2.0);
+            iterate = iterate * iterate + iterate * Pow2(2.0);
         }
 
         iterate += Self(1.0, 0.0);
         let shift = 2.0f64.powi(shift as i32);
 
-        Self(iterate.0 * shift, iterate.1 * shift)
+        iterate * Pow2(shift)
     }
 
     pub fn powi(self, pow: i32) -> Self {
@@ -503,8 +512,27 @@ impl Double<f64> {
         x * y
     }
 
-    pub fn ln(self) -> Self {
+    fn powf_impl(self, pow: Self) -> Self {
+        if pow.0 == 0.0 {
+            return Self(1.0, 0.0);
+        }
+
         let mut value = self;
+        if pow.0.floor() == pow.0 && pow.1.floor() == pow.1 {
+            if ((pow.0 * 0.5).floor() == (pow.0 * 0.5)) == ((pow.1 * 0.5).floor() == (pow.1 * 0.5))
+            {
+                value = value.abs();
+            }
+        }
+        (value.ln() * pow).exp()
+    }
+
+    pub fn powf(self, pow: impl Into<Self>) -> Self {
+        self.powf_impl(pow.into())
+    }
+
+    pub fn ln(self) -> Self {
+        let value = self;
         if value.0 < 0.0 {
             return Self::NAN;
         }
@@ -512,7 +540,29 @@ impl Double<f64> {
             return Self::NEG_INFINITY;
         }
 
-        todo!()
+        let mut x = Self(self.0.ln(), 0.0);
+
+        x += value * (-x).exp();
+        x -= Self(1.0, 0.0);
+        x += value * (-x).exp();
+        x -= Self(1.0, 0.0);
+
+        x
+    }
+
+    pub fn log2(self) -> Self {
+        self.ln() * Self::FRAC_1_LN_2
+    }
+
+    pub fn log10(self) -> Self {
+        self.ln() * Self::FRAC_1_LN_10
+    }
+}
+
+impl From<f64> for Double<f64> {
+    #[inline]
+    fn from(value: f64) -> Self {
+        Self(value, 0.0)
     }
 }
 
@@ -568,6 +618,11 @@ mod tests {
 
     #[test]
     fn test_math() {
+        dbg!(from_rug(&Float::with_val(PREC, 2.0f64).ln()));
+        dbg!(from_rug(&Float::with_val(PREC, 10.0f64).ln()));
+        dbg!(from_rug(&Float::with_val(PREC, 2.0f64).ln().recip()));
+        dbg!(from_rug(&Float::with_val(PREC, 10.0f64).ln().recip()));
+
         let mut rng = rug::rand::RandState::new();
         for _ in 0..100 {
             let x = Float::with_val(PREC, Float::random_normal(&mut rng));
@@ -579,7 +634,9 @@ mod tests {
             let div_rug = Float::with_val(PREC, &x / &y);
             let sqrt_rug = Float::with_val(PREC, x.clone().abs().sqrt());
             let exp_rug = Float::with_val(PREC, x.clone().exp());
+            let ln_rug = Float::with_val(PREC, x.clone().abs().ln());
             let powi_rug = Float::with_val(PREC, x.clone().pow(5));
+            let powf_rug = Float::with_val(PREC, x.clone().abs().pow(5.5));
 
             let add = from_rug(&x) + from_rug(&y);
             let sub = from_rug(&x) - from_rug(&y);
@@ -587,7 +644,9 @@ mod tests {
             let div = from_rug(&x) / from_rug(&y);
             let sqrt = from_rug(&x).abs().sqrt();
             let exp = from_rug(&x).exp();
+            let ln = from_rug(&x).abs().ln();
             let powi = from_rug(&x).powi(5);
+            let powf = from_rug(&x).abs().powf(5.5);
 
             let err_add = from_rug(&Float::with_val(PREC, &add_rug - to_rug(add))).abs();
             let err_sub = from_rug(&Float::with_val(PREC, &sub_rug - to_rug(sub))).abs();
@@ -595,7 +654,9 @@ mod tests {
             let err_div = from_rug(&Float::with_val(PREC, &div_rug - to_rug(div))).abs();
             let err_sqrt = from_rug(&Float::with_val(PREC, &sqrt_rug - to_rug(sqrt))).abs();
             let err_exp = from_rug(&Float::with_val(PREC, &exp_rug - to_rug(exp))).abs();
+            let err_ln = from_rug(&Float::with_val(PREC, &ln_rug - to_rug(ln))).abs();
             let err_powi = from_rug(&Float::with_val(PREC, &powi_rug - to_rug(powi))).abs();
+            let err_powf = from_rug(&Float::with_val(PREC, &powf_rug - to_rug(powf))).abs();
 
             assert!(err_add / add.abs() < Double::EPSILON);
             assert!(err_sub / sub.abs() < Double::EPSILON);
@@ -603,7 +664,9 @@ mod tests {
             assert!(err_div / div.abs() < Double::EPSILON);
             assert!(err_sqrt / sqrt.abs() < Double::EPSILON);
             assert!(err_exp / exp.abs() < Double::EPSILON);
+            assert!(err_ln / ln.abs() < Double::EPSILON);
             assert!(err_powi / powi.abs() < Double::EPSILON);
+            assert!(err_powf / powf.abs() < Double::EPSILON);
         }
     }
 }
