@@ -1,3 +1,4 @@
+use aligned_vec::avec;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
@@ -8,9 +9,9 @@ pub fn bench_f128(c: &mut Criterion) {
     if let Some(simd) = pulp::x86::V3::try_new() {
         for n in 10..25 {
             let size = 1 << n;
-            let mut v0 = vec![1.0; size];
-            let mut v1 = vec![1.0; size];
-            let mut v = vec![1.0; size * 2];
+            let mut v0 = avec![1.0; size];
+            let mut v1 = avec![1.0; size];
+            let mut v = avec![1.0; size * 2];
 
             c.bench_function(&format!("split-{n}"), |bencher| {
                 bencher.iter(|| {
@@ -22,6 +23,8 @@ pub fn bench_f128(c: &mut Criterion) {
 
                             for (v0, v1) in core::iter::zip(&mut *v0, &mut *v1) {
                                 let mut x = Double(*v0, *v1);
+                                x = double::simd_add(simd, x, x);
+                                x = double::simd_add(simd, x, x);
                                 x = double::simd_add(simd, x, x);
                                 *v0 = x.0;
                                 *v1 = x.1;
@@ -43,8 +46,11 @@ pub fn bench_f128(c: &mut Criterion) {
                             for v in &mut *v {
                                 let mut x = double::unpack(simd, *v);
                                 x = double::simd_add(simd, x, x);
+                                x = double::simd_add(simd, x, x);
+                                x = double::simd_add(simd, x, x);
                                 *v = double::pack(simd, x);
                             }
+
                             core::hint::black_box(v);
                         },
                     )
