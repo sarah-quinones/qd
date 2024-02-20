@@ -24,4 +24,9 @@ faer = ["faer-entity"]
 aligned-vec = "0.5.0"
 criterion = "0.5.1"
 equator = "0.1.10"
+rand = "0.8.5"
 rug = "1.19.2"
+
+[[bench]]
+name = "bench"
+harness = false

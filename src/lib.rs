@@ -38,6 +38,7 @@ fn quick_two_sum<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s)
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 fn two_sum<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     let s = simd.f64s_add(a, b);
     let bb = simd.f64s_sub(s, a);
@@ -49,6 +50,22 @@ fn two_sum<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
 
 #[inline(always)]
 #[allow(dead_code)]
+fn two_sum_e<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
+    let sign_bit = simd.f64s_splat(-0.0);
+    let cmp = simd.u64s_greater_than(
+        pulp::cast(simd.f64s_or(a, sign_bit)),
+        pulp::cast(simd.f64s_or(b, sign_bit)),
+    );
+    let (a, b) = (
+        simd.m64s_select_f64s(cmp, a, b),
+        simd.m64s_select_f64s(cmp, b, a),
+    );
+
+    quick_two_sum(simd, a, b)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
 fn quick_two_diff<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     let s = simd.f64s_sub(a, b);
     let err = simd.f64s_sub(simd.f64s_sub(a, s), b);
@@ -56,6 +73,7 @@ fn quick_two_diff<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 fn two_diff<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     let s = simd.f64s_sub(a, b);
     let bb = simd.f64s_sub(s, a);
@@ -63,6 +81,12 @@ fn two_diff<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     // (a - (s - bb)) - (b + bb)
     let err = simd.f64s_sub(simd.f64s_sub(a, simd.f64s_sub(s, bb)), simd.f64s_add(b, bb));
     (s, err)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+fn two_diff_e<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
+    two_sum_e(simd, a, simd.f64s_neg(b))
 }
 
 #[inline(always)]
@@ -86,7 +110,7 @@ pub mod double {
 
     #[inline(always)]
     pub fn simd_sub<S: Simd>(simd: S, a: Double<S::f64s>, b: Double<S::f64s>) -> Double<S::f64s> {
-        let (s, e) = two_diff(simd, a.0, b.0);
+        let (s, e) = two_diff_e(simd, a.0, b.0);
         let e = simd.f64s_add(e, a.1);
         let e = simd.f64s_sub(e, b.1);
         let (s, e) = quick_two_sum(simd, s, e);
@@ -614,6 +638,19 @@ mod tests {
         assert!(Double(0.0, 0.0) == Double(0.0, 0.0));
         assert!(Double(-0.0, 0.0) == Double(0.0, 0.0));
         assert!(Double::NAN != Double::NAN);
+    }
+
+    #[test]
+    fn test_two_sum() {
+        for _ in 0..1000 {
+            for scale in [1, 10, 100, 1000, 10000] {
+                let a = rand::random::<f64>();
+                let b = rand::random::<f64>() * scale as f64;
+                let simd = pulp::Scalar::new();
+
+                assert!(two_sum_e(simd, a, b) == two_sum(simd, a, b));
+            }
+        }
     }
 
     #[test]
