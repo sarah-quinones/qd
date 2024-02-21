@@ -418,12 +418,12 @@ impl Double<f64> {
     /// 2.0^{-970}: precision below this value begins to degrade.
     pub const MIN_POSITIVE: Self = Self(1.0020841800044864e-292, 0.0);
 
-    pub const MANTISSA_DIGITS: u32 = 2 * f64::MANTISSA_DIGITS;
+    pub const MANTISSA_DIGITS: u32 = 100;
 
     pub const ZERO: Self = Self(0.0, 0.0);
     pub const NAN: Self = Self(f64::NAN, f64::NAN);
-    pub const INFINITY: Self = Self(f64::INFINITY, f64::INFINITY);
-    pub const NEG_INFINITY: Self = Self(-f64::INFINITY, -f64::INFINITY);
+    pub const INFINITY: Self = Self(f64::INFINITY, 0.0);
+    pub const NEG_INFINITY: Self = Self(-f64::INFINITY, 0.0);
 
     pub const LN_2: Self = Self(0.6931471805599453, 2.3190468138462996e-17);
     pub const FRAC_1_LN_2: Self = Self(1.4426950408889634, 2.0355273740931033e-17);
