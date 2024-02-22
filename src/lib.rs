@@ -5,9 +5,6 @@
 use bytemuck::{Pod, Zeroable};
 use pulp::{Scalar, Simd};
 
-#[cfg(not(feature = "std"))]
-use libm::Libm;
-
 /// Value representing the implicit sum of two floating point terms, such that the absolute
 /// value of the second term is less half a ULP of the first term.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -18,6 +15,17 @@ pub struct Pow2(pub f64);
 
 unsafe impl<T: Zeroable> Zeroable for Double<T> {}
 unsafe impl<T: Pod> Pod for Double<T> {}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_feature = "fma")]
+const HAS_VECTORIZATION_AT_COMPTIME: bool = true;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(not(target_feature = "fma"))]
+const HAS_VECTORIZATION_AT_COMPTIME: bool = false;
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+const HAS_VECTORIZATION_AT_COMPTIME: bool = false;
 
 impl<I: Iterator> Iterator for Double<I> {
     type Item = Double<I::Item>;
@@ -48,13 +56,27 @@ fn two_sum<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     (s, err)
 }
 
+macro_rules! pick {
+    ($libm: expr, $std: expr$(,)?) => {{
+        #[cfg(feature = "std")]
+        {
+            $std
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            $libm
+        }
+    }};
+}
+
 #[inline(always)]
 #[allow(dead_code)]
-fn two_sum_e<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
+fn two_sum_v2<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     let sign_bit = simd.f64s_splat(-0.0);
+    let sign_mask = simd.f64s_not(sign_bit);
     let cmp = simd.u64s_greater_than(
-        pulp::cast(simd.f64s_or(a, sign_bit)),
-        pulp::cast(simd.f64s_or(b, sign_bit)),
+        pulp::cast(simd.f64s_and(sign_mask, a)),
+        pulp::cast(simd.f64s_and(sign_mask, b)),
     );
     let (a, b) = (
         simd.m64s_select_f64s(cmp, a, b),
@@ -85,12 +107,49 @@ fn two_diff<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
 
 #[inline(always)]
 #[allow(dead_code)]
-fn two_diff_e<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
-    two_sum_e(simd, a, simd.f64s_neg(b))
+fn two_diff_v2<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
+    two_sum_v2(simd, a, simd.f64s_neg(b))
 }
 
 #[inline(always)]
-fn two_prod<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
+fn split(value: f64) -> (f64, f64) {
+    const K_SPLITTER: f64 = ((1u64 << 27) + 1) as f64;
+    const K_SPLIT_SCALE: f64 = (1u64 << (27 + 1)) as f64;
+    const K_SPLIT_INV_SCALE: f64 = 1.0 / K_SPLIT_SCALE;
+    const K_SPLIT_THRESHOLD: f64 = f64::MAX / K_SPLIT_SCALE;
+
+    if value.abs() > K_SPLIT_THRESHOLD {
+        let value = K_SPLIT_INV_SCALE * value;
+        let tmp = K_SPLITTER * value;
+
+        let upper = tmp - (tmp - value);
+        let lower = value - upper;
+        (upper * K_SPLIT_SCALE, lower * K_SPLIT_SCALE)
+    } else {
+        let tmp = K_SPLITTER * value;
+
+        let upper = tmp - (tmp - value);
+        let lower = value - upper;
+        (upper, lower)
+    }
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+fn two_prod(a: f64, b: f64) -> (f64, f64) {
+    let a_split = split(a);
+    let b_split = split(b);
+    let result = a * b;
+
+    (
+        result,
+        ((a_split.0 * b_split.0 - result) + a_split.0 * b_split.1 + a_split.1 * b_split.0)
+            + a_split.1 * b_split.1,
+    )
+}
+
+#[inline(always)]
+fn two_prod_v2<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> (S::f64s, S::f64s) {
     let p = simd.f64s_mul(a, b);
     let err = simd.f64s_mul_add(a, b, simd.f64s_neg(p));
 
@@ -102,7 +161,11 @@ pub mod double {
 
     #[inline(always)]
     pub fn simd_add<S: Simd>(simd: S, a: Double<S::f64s>, b: Double<S::f64s>) -> Double<S::f64s> {
-        let (s, e) = two_sum(simd, a.0, b.0);
+        let (s, e) = if !HAS_VECTORIZATION_AT_COMPTIME && coe::is_same::<S, pulp::Scalar>() {
+            two_sum(simd, a.0, b.0)
+        } else {
+            two_sum_v2(simd, a.0, b.0)
+        };
         let e = simd.f64s_add(e, simd.f64s_add(a.1, b.1));
         let (s, e) = quick_two_sum(simd, s, e);
         Double(s, e)
@@ -110,7 +173,11 @@ pub mod double {
 
     #[inline(always)]
     pub fn simd_sub<S: Simd>(simd: S, a: Double<S::f64s>, b: Double<S::f64s>) -> Double<S::f64s> {
-        let (s, e) = two_diff_e(simd, a.0, b.0);
+        let (s, e) = if !HAS_VECTORIZATION_AT_COMPTIME && coe::is_same::<S, pulp::Scalar>() {
+            two_diff(simd, a.0, b.0)
+        } else {
+            two_diff_v2(simd, a.0, b.0)
+        };
         let e = simd.f64s_add(e, a.1);
         let e = simd.f64s_sub(e, b.1);
         let (s, e) = quick_two_sum(simd, s, e);
@@ -123,20 +190,30 @@ pub mod double {
     }
 
     #[inline(always)]
-    pub fn simd_mul<S: Simd>(simd: S, a: Double<S::f64s>, b: Double<S::f64s>) -> Double<S::f64s> {
-        let (p1, p2) = two_prod(simd, a.0, b.0);
-        let p2 = simd.f64s_add(
-            p2,
-            simd.f64s_add(simd.f64s_mul(a.0, b.1), simd.f64s_mul(a.1, b.0)),
-        );
+    fn simd_mul_impl<S: Simd>(simd: S, a: Double<S::f64s>, b: Double<S::f64s>) -> Double<S::f64s> {
+        let (p1, p2) = two_prod_v2(simd, a.0, b.0);
+
+        let p2 = simd.f64s_mul_add(a.1, b.0, simd.f64s_mul_add(a.0, b.1, p2));
         let (p1, p2) = quick_two_sum(simd, p1, p2);
         Double(p1, p2)
     }
 
     #[inline(always)]
+    pub fn simd_mul<S: Simd>(simd: S, a: Double<S::f64s>, b: Double<S::f64s>) -> Double<S::f64s> {
+        if !HAS_VECTORIZATION_AT_COMPTIME && coe::is_same::<S, pulp::Scalar>() {
+            pulp::Arch::new().dispatch(
+                #[inline(always)]
+                || simd_mul_impl(simd, a, b),
+            )
+        } else {
+            simd_mul_impl(simd, a, b)
+        }
+    }
+
+    #[inline(always)]
     fn simd_mul_f64<S: Simd>(simd: S, a: Double<S::f64s>, b: S::f64s) -> Double<S::f64s> {
-        let (p1, p2) = two_prod(simd, a.0, b);
-        let p2 = simd.f64s_add(p2, simd.f64s_mul(a.1, b));
+        let (p1, p2) = two_prod_v2(simd, a.0, b);
+        let p2 = simd.f64s_mul_add(a.1, b, p2);
         let (p1, p2) = quick_two_sum(simd, p1, p2);
         Double(p1, p2)
     }
@@ -422,13 +499,14 @@ impl Double<f64> {
 
     pub const ZERO: Self = Self(0.0, 0.0);
     pub const NAN: Self = Self(f64::NAN, f64::NAN);
-    pub const INFINITY: Self = Self(f64::INFINITY, 0.0);
-    pub const NEG_INFINITY: Self = Self(-f64::INFINITY, 0.0);
+    pub const INFINITY: Self = Self(f64::INFINITY, f64::INFINITY);
+    pub const NEG_INFINITY: Self = Self(-f64::INFINITY, f64::NEG_INFINITY);
 
     pub const LN_2: Self = Self(0.6931471805599453, 2.3190468138462996e-17);
     pub const FRAC_1_LN_2: Self = Self(1.4426950408889634, 2.0355273740931033e-17);
     pub const LN_10: Self = Self(2.302585092994046, -2.1707562233822494e-16);
     pub const FRAC_1_LN_10: Self = Self(0.4342944819032518, 1.098319650216765e-17);
+    pub const PI: Self = Self(3.141592653589793, 1.2246467991473532e-16);
 
     #[inline(always)]
     pub fn abs(self) -> Self {
@@ -449,7 +527,7 @@ impl Double<f64> {
         } else {
             let a = self;
 
-            let x = a.0.sqrt().recip();
+            let x = pick!(libm::sqrt, f64::sqrt)(a.0).recip();
             let ax = Self(a.0 * x, 0.0);
 
             ax + (a - ax * ax) * Self(x * 0.5, 0.0)
@@ -469,11 +547,10 @@ impl Double<f64> {
             return Self(1.0, 0.0);
         }
 
-        let shift = (value.0 / Self::LN_2.0 + 0.5).floor();
+        let shift = pick!(libm::floor, f64::floor)(value.0 / Self::LN_2.0 + 0.5);
 
-        let digits = Self::MANTISSA_DIGITS;
         let num_squares = 9;
-        let num_terms = digits / num_squares;
+        let num_terms = 9;
 
         let scale = (1u32 << num_squares) as f64;
         let inv_scale = scale.recip();
@@ -497,7 +574,7 @@ impl Double<f64> {
             term = coefficient * r_power;
             iterate += term;
 
-            if term.0.abs() <= tolerance {
+            if pick!(libm::fabs, f64::abs)(term.0) <= tolerance {
                 break;
             }
         }
@@ -507,7 +584,7 @@ impl Double<f64> {
         }
 
         iterate += Self(1.0, 0.0);
-        let shift = 2.0f64.powi(shift as i32);
+        let shift = pick!(libm::pow, f64::powi)(2.0f64, shift as _);
 
         iterate * Pow2(shift)
     }
@@ -542,8 +619,11 @@ impl Double<f64> {
         }
 
         let mut value = self;
-        if pow.0.floor() == pow.0 && pow.1.floor() == pow.1 {
-            if ((pow.0 * 0.5).floor() == (pow.0 * 0.5)) == ((pow.1 * 0.5).floor() == (pow.1 * 0.5))
+        if pick!(libm::floor, f64::floor)(pow.0) == pow.0
+            && pick!(libm::floor, f64::floor)(pow.1) == pow.1
+        {
+            if (pick!(libm::floor, f64::floor)(pow.0 * 0.5) == (pow.0 * 0.5))
+                == (pick!(libm::floor, f64::floor)(pow.1 * 0.5) == (pow.1 * 0.5))
             {
                 value = value.abs();
             }
@@ -564,10 +644,8 @@ impl Double<f64> {
             return Self::NEG_INFINITY;
         }
 
-        let mut x = Self(self.0.ln(), 0.0);
+        let mut x = Self(pick!(libm::log, f64::ln)(self.0), 0.0);
 
-        x += value * (-x).exp();
-        x -= Self(1.0, 0.0);
         x += value * (-x).exp();
         x -= Self(1.0, 0.0);
 
@@ -641,14 +719,16 @@ mod tests {
     }
 
     #[test]
-    fn test_two_sum() {
+    fn test_v2() {
         for _ in 0..1000 {
-            for scale in [1, 10, 100, 1000, 10000] {
+            for scale in [1.0, 10.0, 100.0, 1000.0, 10000.0, 1e304] {
                 let a = rand::random::<f64>();
-                let b = rand::random::<f64>() * scale as f64;
+                let b = rand::random::<f64>() * scale;
                 let simd = pulp::Scalar::new();
 
-                assert!(two_sum_e(simd, a, b) == two_sum(simd, a, b));
+                assert!(two_sum_v2(simd, a, b) == two_sum(simd, a, b));
+                assert!(two_diff_v2(simd, a, b) == two_diff(simd, a, b));
+                assert!(two_prod_v2(simd, a, b) == two_prod(a, b));
             }
         }
     }
@@ -659,6 +739,7 @@ mod tests {
         dbg!(from_rug(&Float::with_val(PREC, 10.0f64).ln()));
         dbg!(from_rug(&Float::with_val(PREC, 2.0f64).ln().recip()));
         dbg!(from_rug(&Float::with_val(PREC, 10.0f64).ln().recip()));
+        dbg!(from_rug(&(Float::with_val(PREC, 1.0).atan() * 4.0)));
 
         let mut rng = rug::rand::RandState::new();
         for _ in 0..100 {
