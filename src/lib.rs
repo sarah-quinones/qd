@@ -452,6 +452,15 @@ impl core::ops::Div for Double<f64> {
     }
 }
 
+impl core::ops::Rem for Double<f64> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn rem(self, _: Self) -> Self::Output {
+        todo!()
+    }
+}
+
 impl core::ops::AddAssign for Double<f64> {
     #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
@@ -480,6 +489,12 @@ impl core::ops::DivAssign for Double<f64> {
     }
 }
 
+impl core::ops::RemAssign for Double<f64> {
+    #[inline(always)]
+    fn rem_assign(&mut self, _: Self) {
+        todo!()
+    }
+}
 impl core::ops::Neg for Double<f64> {
     type Output = Self;
 

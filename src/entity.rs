@@ -1,5 +1,6 @@
 use super::*;
 use faer_entity::*;
+use num_traits::ParseFloatError;
 pub struct DoubleGroup {
     __private: (),
 }
@@ -109,6 +110,32 @@ unsafe impl Entity for Double<f64> {
     }
 }
 
+impl num_traits::Zero for Double<f64> {
+    #[inline]
+    fn zero() -> Self {
+        Self(0.0, 0.0)
+    }
+
+    #[inline]
+    fn is_zero(&self) -> bool {
+        *self == Self(0.0, 0.0)
+    }
+}
+
+impl num_traits::One for Double<f64> {
+    #[inline]
+    fn one() -> Self {
+        Self(1.0, 0.0)
+    }
+}
+impl num_traits::Num for Double<f64> {
+    type FromStrRadixErr = ParseFloatError;
+
+    fn from_str_radix(_: &str, _: u32) -> Result<Self, Self::FromStrRadixErr> {
+        todo!()
+    }
+}
+
 unsafe impl Conjugate for Double<f64> {
     type Conj = Double<f64>;
     type Canonical = Double<f64>;
@@ -120,12 +147,12 @@ unsafe impl Conjugate for Double<f64> {
 
 impl RealField for Double<f64> {
     #[inline(always)]
-    fn faer_epsilon() -> Option<Self> {
-        Some(Self::EPSILON)
+    fn faer_epsilon() -> Self {
+        Self::EPSILON
     }
     #[inline(always)]
-    fn faer_zero_threshold() -> Option<Self> {
-        Some(Self::MIN_POSITIVE)
+    fn faer_zero_threshold() -> Self {
+        Self::MIN_POSITIVE
     }
 
     #[inline(always)]
@@ -262,7 +289,7 @@ impl RealField for Double<f64> {
 impl ComplexField for Double<f64> {
     type Real = Double<f64>;
     type Simd = pulp::Arch;
-    type ScalarSimd = pulp::Arch;
+    type ScalarSimd = pulp::ScalarArch;
     type PortableSimd = pulp::Arch;
 
     #[inline(always)]
