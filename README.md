@@ -1,6 +1,6 @@
 ## qd
 
-`qd` is a double-double implementation of extended precision floating point arithmetic.
+`qd` is a double-double implementation for extended precision floating point arithmetic.
 
 based on Jack Poulson's [c++ implementation](https://gitlab.com/hodge_star/mantis/)
 
