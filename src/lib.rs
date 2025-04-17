@@ -329,7 +329,8 @@ impl Quad {
     }
 
     pub fn trunc(self) -> Self {
-        let trunc = Self(self.0.trunc(), self.1.trunc());
+        let trunc = pick!(libm::trunc, f64::trunc);
+        let trunc = Self(trunc(self.0), trunc(self.1));
 
         if trunc.0 == self.0 {
             trunc
