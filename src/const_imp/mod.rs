@@ -8,8 +8,12 @@ pub const fn quick_two_sum(large: f64, small: f64) -> Quad {
     Quad(s, e)
 }
 
+pub const fn fabs(a: f64) -> f64 {
+    f64::from_bits(a.to_bits() & (u64::MAX >> 1))
+}
+
 pub const fn two_sum(a: f64, b: f64) -> Quad {
-    let (a, b) = if a.abs() > b.abs() { (a, b) } else { (b, a) };
+    let (a, b) = if fabs(a) > fabs(b) { (a, b) } else { (b, a) };
     quick_two_sum(a, b)
 }
 

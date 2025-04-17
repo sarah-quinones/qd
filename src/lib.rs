@@ -291,7 +291,7 @@ impl Quad {
             term = coefficient * r_power;
             iterate = iterate + term;
 
-            if libm::fabs(term.0) <= tolerance {
+            if const_imp::fabs(term.0) <= tolerance {
                 break;
             }
         }
