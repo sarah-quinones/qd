@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), no_std)]
+
 use core::cmp::Ordering;
 use core::f64;
 use core::ops::*;
@@ -5,17 +7,31 @@ use core::ops::*;
 mod const_fma;
 mod const_imp;
 
+#[cfg(not(feature = "std"))]
+macro_rules! pick {
+    ($libm: expr, $std: expr) => {
+        $libm
+    };
+}
+
+#[cfg(feature = "std")]
+macro_rules! pick {
+    ($libm: expr, $std: expr) => {
+        $std
+    };
+}
+
 mod imp {
     use super::*;
 
     pub use super::const_imp::*;
 
     pub fn fma(a: f64, b: f64, c: f64) -> f64 {
-        f64::mul_add(a, b, c)
+        pick!(libm::fma, f64::mul_add)(a, b, c)
     }
 
     pub fn sqrt(a: f64) -> f64 {
-        f64::sqrt(a)
+        pick!(libm::sqrt, f64::sqrt)(a)
     }
 
     pub fn two_prod(a: f64, b: f64) -> Quad {
@@ -35,6 +51,9 @@ mod imp {
 
 pub mod simd;
 
+/// extended precision floating point type.
+///
+/// math operations assume that `self.1.abs() < self.0.abs() * ulp / 2.0`
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct Quad<T = f64>(pub T, pub T);
@@ -242,7 +261,7 @@ impl Quad {
             return Self(1.0, 0.0);
         }
 
-        let shift = f64::floor(value.0 / Self::LN_2.0 + 0.5);
+        let shift = pick!(libm::floor, f64::floor)(value.0 / Self::LN_2.0 + 0.5);
 
         let num_squares = 9;
         let num_terms = 9;
@@ -269,7 +288,7 @@ impl Quad {
             term = coefficient * r_power;
             iterate = iterate + term;
 
-            if f64::abs(term.0) <= tolerance {
+            if libm::fabs(term.0) <= tolerance {
                 break;
             }
         }
@@ -279,7 +298,7 @@ impl Quad {
         }
 
         iterate = iterate + Self(1.0, 0.0);
-        let shift = f64::powi(2.0f64, shift as _);
+        let shift = pick!(libm::pow, f64::powi)(2.0f64, shift as _);
 
         iterate * Self::from_f64(shift)
     }
@@ -293,7 +312,7 @@ impl Quad {
             return Self::NEG_INFINITY;
         }
 
-        let mut x = Self(f64::ln(self.0), 0.0);
+        let mut x = Self(pick!(libm::log, f64::ln)(self.0), 0.0);
 
         x = x + value * (-x).exp();
         x = x - Self(1.0, 0.0);
@@ -307,6 +326,16 @@ impl Quad {
 
     pub fn log10(self) -> Self {
         self.ln() * Self::FRAC_1_LN_10
+    }
+
+    pub fn trunc(self) -> Self {
+        let trunc = Self(self.0.trunc(), self.1.trunc());
+
+        if trunc.0 == self.0 {
+            trunc
+        } else {
+            Quad(trunc.0, 0.0)
+        }
     }
 }
 
@@ -376,7 +405,7 @@ impl Rem for Quad {
     type Output = Quad;
 
     fn rem(self, rhs: Self) -> Self::Output {
-        todo!()
+        self - (self / rhs).trunc() * rhs
     }
 }
 
@@ -464,6 +493,38 @@ impl From<f64> for Quad {
     }
 }
 
+impl num_traits::Zero for Quad {
+    fn zero() -> Self {
+        Self::ZERO
+    }
+
+    fn is_zero(&self) -> bool {
+        *self == Self::ZERO
+    }
+}
+
+impl num_traits::One for Quad {
+    fn one() -> Self {
+        Self::ONE
+    }
+
+    fn is_one(&self) -> bool {
+        *self == Self::ONE
+    }
+}
+impl num_traits::Num for Quad {
+    type FromStrRadixErr = num_traits::ParseFloatError;
+
+    fn from_str_radix(str: &str, radix: u32) -> Result<Self, Self::FromStrRadixErr> {
+        let _ = str;
+        let _ = radix;
+
+        Err(num_traits::ParseFloatError {
+            kind: num_traits::FloatErrorKind::Invalid,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,7 +539,13 @@ mod tests {
         const {
             let x = Quad(2.0, 0.0);
             let y = x.const_sqrt();
-            assert!(y.const_mul(y).lt(Quad::from_f64(1e-30)));
+            assert!((y.const_mul(y).sub_accurate(x).abs()).lt(Quad::from_f64(1e-30)));
         };
+    }
+
+    #[test]
+    fn test_rem() {
+        let x = Quad::from(36.0) / Quad::from(10.0);
+        assert!((x % Quad::from(0.5) - Quad::from(10.0).recip()).abs() < Quad::from(1e-30));
     }
 }
