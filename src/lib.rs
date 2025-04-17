@@ -4,6 +4,9 @@ use core::cmp::Ordering;
 use core::f64;
 use core::ops::*;
 
+use bytemuck::Pod;
+use bytemuck::Zeroable;
+
 mod const_fma;
 mod const_imp;
 
@@ -550,3 +553,6 @@ mod tests {
         assert!((x % Quad::from(0.5) - Quad::from(10.0).recip()).abs() < Quad::from(1e-30));
     }
 }
+
+unsafe impl<T: Zeroable> Zeroable for Quad<T> {}
+unsafe impl<T: Pod> Pod for Quad<T> {}
