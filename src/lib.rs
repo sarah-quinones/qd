@@ -1,7 +1,9 @@
 #![cfg_attr(not(test), no_std)]
 
+#[cfg(feature = "std")]
+extern crate std;
+
 use core::cmp::Ordering;
-use core::f64;
 use core::ops::*;
 
 use bytemuck::Pod;
