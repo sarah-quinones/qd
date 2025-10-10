@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["sarah <>"]
 description = "Extended precision floating point arithmetic"
 readme = "README.md"
-repository = "https://github.com/sarah-ek/qd/"
+repository = "https://github.com/sarah-quinones/qd/"
 license = "MIT"
 keywords = ["math", "floating-point", "precision"]
 

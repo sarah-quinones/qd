@@ -6,52 +6,51 @@ extern crate std;
 use core::cmp::Ordering;
 use core::ops::*;
 
-use bytemuck::Pod;
-use bytemuck::Zeroable;
+use bytemuck::{Pod, Zeroable};
 
 mod const_fma;
 mod const_imp;
 
 #[cfg(not(feature = "std"))]
 macro_rules! pick {
-    ($libm: expr, $std: expr) => {
-        $libm
-    };
+	($libm: expr, $std: expr) => {
+		$libm
+	};
 }
 
 #[cfg(feature = "std")]
 macro_rules! pick {
-    ($libm: expr, $std: expr) => {
-        $std
-    };
+	($libm: expr, $std: expr) => {
+		$std
+	};
 }
 
 mod imp {
-    use super::*;
+	use super::*;
 
-    pub use super::const_imp::*;
+	pub use super::const_imp::*;
 
-    pub fn fma(a: f64, b: f64, c: f64) -> f64 {
-        pick!(libm::fma, f64::mul_add)(a, b, c)
-    }
+	pub fn fma(a: f64, b: f64, c: f64) -> f64 {
+		pick!(libm::fma, f64::mul_add)(a, b, c)
+	}
 
-    pub fn sqrt(a: f64) -> f64 {
-        pick!(libm::sqrt, f64::sqrt)(a)
-    }
+	pub fn sqrt(a: f64) -> f64 {
+		pick!(libm::sqrt, f64::sqrt)(a)
+	}
 
-    pub fn two_prod(a: f64, b: f64) -> Quad {
-        let p = a * b;
-        let e = fma(a, b, -p);
-        Quad(p, e)
-    }
+	pub fn two_prod(a: f64, b: f64) -> Quad {
+		let p = a * b;
+		let e = fma(a, b, -p);
+		Quad(p, e)
+	}
 
-    pub fn mul(a: Quad, b: Quad) -> Quad {
-        let Quad(p0, e1) = two_prod(a.0, b.0);
-        let e1 = fma(a.0, b.1, e1);
-        let e1 = fma(a.1, b.0, e1);
+	pub fn mul(a: Quad, b: Quad) -> Quad {
+		let Quad(p0, e1) = two_prod(a.0, b.0);
+		let e1 = fma(a.0, b.1, e1);
+		let e1 = fma(a.1, b.0, e1);
 
-        const_imp::quick_two_sum(p0, e1)
-    }
+		const_imp::quick_two_sum(p0, e1)
+	}
 }
 
 pub mod simd;
@@ -64,496 +63,466 @@ pub mod simd;
 pub struct Quad<T = f64>(pub T, pub T);
 
 impl Quad {
-    pub const RADIX: u32 = 2;
-    pub const MANTISSA_DIGITS: u32 = 105;
-    pub const DIGITS: u32 = 31;
+	pub const DIGITS: u32 = 31;
+	pub const EPSILON: Self = Self(f64::EPSILON * f64::EPSILON, 0.0);
+	pub const FRAC_1_LN_10: Self = Self(0.4342944819032518, 1.098319650216765e-17);
+	pub const FRAC_1_LN_2: Self = Self(1.4426950408889634, 2.0355273740931033e-17);
+	pub const INFINITY: Self = Self(f64::INFINITY, 0.0);
+	pub const LN_10: Self = Self(2.302585092994046, -2.1707562233822494e-16);
+	pub const LN_2: Self = Self(0.6931471805599453, 2.3190468138462996e-17);
+	pub const MANTISSA_DIGITS: u32 = 105;
+	pub const MAX: Self = Self(f64::MAX, f64::MAX * f64::EPSILON / 2.0);
+	pub const MAX_EXP: i32 = f64::MAX_EXP;
+	pub const MIN: Self = Self(-Self::MAX.0, -Self::MAX.1);
+	pub const MIN_EXP: i32 = f64::MIN_EXP;
+	pub const MIN_POSITIVE: Self = Self(f64::MIN_POSITIVE, 0.0);
+	pub const NAN: Self = Self(f64::NAN, f64::NAN);
+	pub const NEG_INFINITY: Self = Self(f64::NEG_INFINITY, 0.0);
+	pub const ONE: Self = Self(1.0, 0.0);
+	pub const PI: Self = Self(3.141592653589793, 1.2246467991473532e-16);
+	pub const RADIX: u32 = 2;
+	pub const ZERO: Self = Self(0.0, 0.0);
 
-    pub const ZERO: Self = Self(0.0, 0.0);
-    pub const ONE: Self = Self(1.0, 0.0);
-    pub const INFINITY: Self = Self(f64::INFINITY, 0.0);
-    pub const NEG_INFINITY: Self = Self(f64::NEG_INFINITY, 0.0);
-    pub const NAN: Self = Self(f64::NAN, f64::NAN);
+	#[inline(always)]
+	pub const fn from_f64(value: f64) -> Self {
+		Quad(value, 0.0)
+	}
 
-    pub const EPSILON: Self = Self(f64::EPSILON * f64::EPSILON, 0.0);
-    pub const MAX: Self = Self(f64::MAX, f64::MAX * f64::EPSILON / 2.0);
-    pub const MIN: Self = Self(-Self::MAX.0, -Self::MAX.1);
-    pub const MIN_POSITIVE: Self = Self(f64::MIN_POSITIVE, 0.0);
+	pub const fn add_estimate(self, rhs: Self) -> Self {
+		const_imp::add_estimate(self, rhs)
+	}
 
-    pub const MIN_EXP: i32 = f64::MIN_EXP;
-    pub const MAX_EXP: i32 = f64::MAX_EXP;
+	pub const fn add_accurate(self, rhs: Self) -> Self {
+		const_imp::add_accurate(self, rhs)
+	}
 
-    pub const LN_2: Self = Self(0.6931471805599453, 2.3190468138462996e-17);
-    pub const FRAC_1_LN_2: Self = Self(1.4426950408889634, 2.0355273740931033e-17);
-    pub const LN_10: Self = Self(2.302585092994046, -2.1707562233822494e-16);
-    pub const FRAC_1_LN_10: Self = Self(0.4342944819032518, 1.098319650216765e-17);
-    pub const PI: Self = Self(3.141592653589793, 1.2246467991473532e-16);
+	pub const fn sub_estimate(self, rhs: Self) -> Self {
+		const_imp::add_estimate(self, rhs.neg())
+	}
 
-    #[inline(always)]
-    pub const fn from_f64(value: f64) -> Self {
-        Quad(value, 0.0)
-    }
+	pub const fn sub_accurate(self, rhs: Self) -> Self {
+		const_imp::add_accurate(self, rhs.neg())
+	}
 
-    pub const fn add_estimate(self, rhs: Self) -> Self {
-        const_imp::add_estimate(self, rhs)
-    }
+	pub const fn neg(self) -> Self {
+		Quad(-self.0, -self.1)
+	}
 
-    pub const fn add_accurate(self, rhs: Self) -> Self {
-        const_imp::add_accurate(self, rhs)
-    }
+	pub const fn abs(self) -> Self {
+		const_imp::abs(self)
+	}
 
-    pub const fn sub_estimate(self, rhs: Self) -> Self {
-        const_imp::add_estimate(self, rhs.neg())
-    }
+	pub fn mul(self, rhs: Self) -> Self {
+		imp::mul(self, rhs)
+	}
 
-    pub const fn sub_accurate(self, rhs: Self) -> Self {
-        const_imp::add_accurate(self, rhs.neg())
-    }
+	pub const fn const_mul(self, rhs: Self) -> Self {
+		const_imp::mul(self, rhs)
+	}
 
-    pub const fn neg(self) -> Self {
-        Quad(-self.0, -self.1)
-    }
+	pub const fn const_div(self, rhs: Self) -> Self {
+		let mut quotient = Quad(self.0 / rhs.0, 0.0);
+		let mut r = self.sub_accurate(rhs.const_mul(quotient));
+		quotient.1 = r.0 / rhs.0;
+		r = r.sub_accurate(rhs.const_mul(Quad(quotient.1, 0.0)));
 
-    pub const fn abs(self) -> Self {
-        const_imp::abs(self)
-    }
+		let update = r.0 / rhs.0;
 
-    pub fn mul(self, rhs: Self) -> Self {
-        imp::mul(self, rhs)
-    }
+		quotient = const_imp::quick_two_sum(quotient.0, quotient.1);
+		quotient = quotient.add_accurate(Quad(update, 0.0));
+		quotient
+	}
 
-    pub const fn const_mul(self, rhs: Self) -> Self {
-        const_imp::mul(self, rhs)
-    }
+	pub const fn const_recip(self) -> Self {
+		Self::ONE.const_div(self)
+	}
 
-    pub const fn const_div(self, rhs: Self) -> Self {
-        let mut quotient = Quad(self.0 / rhs.0, 0.0);
-        let mut r = self.sub_accurate(rhs.const_mul(quotient));
-        quotient.1 = r.0 / rhs.0;
-        r = r.sub_accurate(rhs.const_mul(Quad(quotient.1, 0.0)));
+	pub fn recip(self) -> Self {
+		Self::ONE.div(self)
+	}
 
-        let update = r.0 / rhs.0;
+	pub fn div(self, rhs: Self) -> Self {
+		let mut quotient = Quad(self.0 / rhs.0, 0.0);
+		let mut r = self.sub_accurate(rhs.mul(quotient));
+		quotient.1 = r.0 / rhs.0;
+		r = r.sub_accurate(rhs.mul(Quad(quotient.1, 0.0)));
 
-        quotient = const_imp::quick_two_sum(quotient.0, quotient.1);
-        quotient = quotient.add_accurate(Quad(update, 0.0));
-        quotient
-    }
+		let update = r.0 / rhs.0;
 
-    pub const fn const_recip(self) -> Self {
-        Self::ONE.const_div(self)
-    }
+		quotient = imp::quick_two_sum(quotient.0, quotient.1);
+		quotient = quotient.add_accurate(Quad(update, 0.0));
+		quotient
+	}
 
-    pub fn recip(self) -> Self {
-        Self::ONE.div(self)
-    }
+	fn __mul__(self, rhs: Self) -> Self {
+		self.mul(rhs)
+	}
 
-    pub fn div(self, rhs: Self) -> Self {
-        let mut quotient = Quad(self.0 / rhs.0, 0.0);
-        let mut r = self.sub_accurate(rhs.mul(quotient));
-        quotient.1 = r.0 / rhs.0;
-        r = r.sub_accurate(rhs.mul(Quad(quotient.1, 0.0)));
+	fn __div__(self, rhs: Self) -> Self {
+		self.div(rhs)
+	}
 
-        let update = r.0 / rhs.0;
+	pub const fn eq(self, rhs: Self) -> bool {
+		self.0 == rhs.0 && self.1 == rhs.1
+	}
 
-        quotient = imp::quick_two_sum(quotient.0, quotient.1);
-        quotient = quotient.add_accurate(Quad(update, 0.0));
-        quotient
-    }
+	pub const fn ne(self, rhs: Self) -> bool {
+		self.0 != rhs.0 || self.1 != rhs.1
+	}
 
-    pub const fn eq(self, rhs: Self) -> bool {
-        self.0 == rhs.0 && self.1 == rhs.1
-    }
+	pub const fn is_nan(self) -> bool {
+		self.0.is_nan() || self.1.is_nan()
+	}
 
-    pub const fn ne(self, rhs: Self) -> bool {
-        self.0 != rhs.0 || self.1 != rhs.1
-    }
+	pub const fn is_finite(self) -> bool {
+		self.0.is_finite() && self.1.is_finite()
+	}
 
-    pub const fn is_nan(self) -> bool {
-        self.0.is_nan() || self.1.is_nan()
-    }
+	pub const fn partial_cmp(self, rhs: Self) -> Option<Ordering> {
+		if self.is_nan() || rhs.is_nan() {
+			return None;
+		}
 
-    pub const fn is_finite(self) -> bool {
-        self.0.is_finite() && self.1.is_finite()
-    }
+		if self.0 < rhs.0 {
+			Some(Ordering::Less)
+		} else if self.0 > rhs.0 {
+			Some(Ordering::Greater)
+		} else {
+			if self.1 < rhs.1 {
+				Some(Ordering::Less)
+			} else if self.1 > rhs.1 {
+				Some(Ordering::Greater)
+			} else {
+				Some(Ordering::Equal)
+			}
+		}
+	}
 
-    pub const fn partial_cmp(self, rhs: Self) -> Option<Ordering> {
-        if self.is_nan() || rhs.is_nan() {
-            return None;
-        }
+	pub const fn lt(self, rhs: Self) -> bool {
+		self.0 < rhs.0 || (self.0 == rhs.0 && self.1 < rhs.1)
+	}
 
-        if self.0 < rhs.0 {
-            Some(Ordering::Less)
-        } else if self.0 > rhs.0 {
-            Some(Ordering::Greater)
-        } else {
-            if self.1 < rhs.1 {
-                Some(Ordering::Less)
-            } else if self.1 > rhs.1 {
-                Some(Ordering::Greater)
-            } else {
-                Some(Ordering::Equal)
-            }
-        }
-    }
+	pub const fn le(self, rhs: Self) -> bool {
+		self.0 <= rhs.0 || (self.0 == rhs.0 && self.1 <= rhs.1)
+	}
 
-    pub const fn lt(self, rhs: Self) -> bool {
-        self.0 < rhs.0 || (self.0 == rhs.0 && self.1 < rhs.1)
-    }
+	pub const fn gt(self, rhs: Self) -> bool {
+		rhs.lt(self)
+	}
 
-    pub const fn le(self, rhs: Self) -> bool {
-        self.0 <= rhs.0 || (self.0 == rhs.0 && self.1 <= rhs.1)
-    }
+	pub const fn ge(self, rhs: Self) -> bool {
+		rhs.le(self)
+	}
 
-    pub const fn gt(self, rhs: Self) -> bool {
-        rhs.lt(self)
-    }
+	pub const fn const_sqrt(self) -> Self {
+		if self.0 == 0.0 {
+			return Self::ZERO;
+		}
 
-    pub const fn ge(self, rhs: Self) -> bool {
-        rhs.le(self)
-    }
+		let mut iterate;
+		{
+			let inv_sqrt = 1.0 / const_imp::sqrt(self.0);
+			let left = self.0 * inv_sqrt;
+			let right = self.sub_accurate(const_imp::two_prod(left, left)).0 * (inv_sqrt / 2.0);
+			iterate = const_imp::two_sum(left, right);
+		}
+		{
+			iterate = Self::ONE.const_div(iterate);
+			let left = self.0 * iterate.0;
+			let right = self.sub_accurate(const_imp::two_prod(left, left)).0 * (iterate.0 / 2.0);
+			iterate = const_imp::two_sum(left, right);
+		}
+		iterate
+	}
 
-    pub const fn const_sqrt(self) -> Self {
-        if self.0 == 0.0 {
-            return Self::ZERO;
-        }
+	pub fn sqrt(self) -> Self {
+		if self.0 == 0.0 {
+			return Self::ZERO;
+		}
 
-        let mut iterate;
-        {
-            let inv_sqrt = 1.0 / const_imp::sqrt(self.0);
-            let left = self.0 * inv_sqrt;
-            let right = self.sub_accurate(const_imp::two_prod(left, left)).0 * (inv_sqrt / 2.0);
-            iterate = const_imp::two_sum(left, right);
-        }
-        {
-            iterate = Self::ONE.const_div(iterate);
-            let left = self.0 * iterate.0;
-            let right = self.sub_accurate(const_imp::two_prod(left, left)).0 * (iterate.0 / 2.0);
-            iterate = const_imp::two_sum(left, right);
-        }
-        iterate
-    }
+		let mut iterate;
+		{
+			let inv_sqrt = 1.0 / imp::sqrt(self.0);
+			let left = self.0 * inv_sqrt;
+			let right = self.sub_accurate(imp::two_prod(left, left)).0 * (inv_sqrt / 2.0);
+			iterate = imp::two_sum(left, right);
+		}
+		{
+			iterate = Self::ONE.div(iterate);
+			let left = self.0 * iterate.0;
+			let right = self.sub_accurate(imp::two_prod(left, left)).0 * (iterate.0 / 2.0);
+			iterate = imp::two_sum(left, right);
+		}
+		iterate
+	}
 
-    pub fn sqrt(self) -> Self {
-        if self.0 == 0.0 {
-            return Self::ZERO;
-        }
+	pub fn exp(self) -> Self {
+		let value = self;
+		let exp_max = 709.0;
+		if value.0 <= -exp_max {
+			return Self(0.0, 0.0);
+		}
+		if value.0 >= exp_max {
+			return Self::INFINITY;
+		}
+		if value.0 == 0.0 {
+			return Self(1.0, 0.0);
+		}
 
-        let mut iterate;
-        {
-            let inv_sqrt = 1.0 / imp::sqrt(self.0);
-            let left = self.0 * inv_sqrt;
-            let right = self.sub_accurate(imp::two_prod(left, left)).0 * (inv_sqrt / 2.0);
-            iterate = imp::two_sum(left, right);
-        }
-        {
-            iterate = Self::ONE.div(iterate);
-            let left = self.0 * iterate.0;
-            let right = self.sub_accurate(imp::two_prod(left, left)).0 * (iterate.0 / 2.0);
-            iterate = imp::two_sum(left, right);
-        }
-        iterate
-    }
+		let shift = pick!(libm::floor, f64::floor)(value.0 / Self::LN_2.0 + 0.5);
 
-    pub fn exp(self) -> Self {
-        let value = self;
-        let exp_max = 709.0;
-        if value.0 <= -exp_max {
-            return Self(0.0, 0.0);
-        }
-        if value.0 >= exp_max {
-            return Self::INFINITY;
-        }
-        if value.0 == 0.0 {
-            return Self(1.0, 0.0);
-        }
+		let num_squares = 9;
+		let num_terms = 9;
 
-        let shift = pick!(libm::floor, f64::floor)(value.0 / Self::LN_2.0 + 0.5);
+		let scale = (1u32 << num_squares) as f64;
+		let inv_scale = scale.recip();
 
-        let num_squares = 9;
-        let num_terms = 9;
+		let r = (value - Self::LN_2 * Self(shift, 0.0)) * Self::from_f64(inv_scale);
 
-        let scale = (1u32 << num_squares) as f64;
-        let inv_scale = scale.recip();
+		let mut r_power = r * r;
+		let mut iterate = r + r_power * Self::from_f64(0.5);
 
-        let r = (value - Self::LN_2 * Self(shift, 0.0)) * Self::from_f64(inv_scale);
+		r_power = r_power * r;
 
-        let mut r_power = r * r;
-        let mut iterate = r + r_power * Self::from_f64(0.5);
+		let mut coefficient = Self(6.0, 0.0).recip();
+		let mut term = coefficient * r_power;
 
-        r_power = r_power * r;
+		iterate = iterate + term;
+		let tolerance = Self::EPSILON.0 * inv_scale;
 
-        let mut coefficient = Self(6.0, 0.0).recip();
-        let mut term = coefficient * r_power;
+		for j in 4..num_terms {
+			r_power = r_power * r;
+			coefficient = coefficient / Self(j as f64, 0.0);
+			term = coefficient * r_power;
+			iterate = iterate + term;
 
-        iterate = iterate + term;
-        let tolerance = Self::EPSILON.0 * inv_scale;
+			if const_imp::fabs(term.0) <= tolerance {
+				break;
+			}
+		}
 
-        for j in 4..num_terms {
-            r_power = r_power * r;
-            coefficient = coefficient / Self(j as f64, 0.0);
-            term = coefficient * r_power;
-            iterate = iterate + term;
+		for _ in 0..num_squares {
+			iterate = iterate * iterate + iterate * Self::from_f64(2.0);
+		}
 
-            if const_imp::fabs(term.0) <= tolerance {
-                break;
-            }
-        }
+		iterate = iterate + Self(1.0, 0.0);
+		let shift = pick!(libm::pow, f64::powi)(2.0f64, shift as _);
 
-        for _ in 0..num_squares {
-            iterate = iterate * iterate + iterate * Self::from_f64(2.0);
-        }
+		iterate * Self::from_f64(shift)
+	}
 
-        iterate = iterate + Self(1.0, 0.0);
-        let shift = pick!(libm::pow, f64::powi)(2.0f64, shift as _);
+	pub fn ln(self) -> Self {
+		let value = self;
+		if value.0 < 0.0 {
+			return Self::NAN;
+		}
+		if value.0 == 0.0 {
+			return Self::NEG_INFINITY;
+		}
 
-        iterate * Self::from_f64(shift)
-    }
+		let mut x = Self(pick!(libm::log, f64::ln)(self.0), 0.0);
 
-    pub fn ln(self) -> Self {
-        let value = self;
-        if value.0 < 0.0 {
-            return Self::NAN;
-        }
-        if value.0 == 0.0 {
-            return Self::NEG_INFINITY;
-        }
+		x = x + value * (-x).exp();
+		x = x - Self(1.0, 0.0);
 
-        let mut x = Self(pick!(libm::log, f64::ln)(self.0), 0.0);
+		x
+	}
 
-        x = x + value * (-x).exp();
-        x = x - Self(1.0, 0.0);
+	pub fn log2(self) -> Self {
+		self.ln() * Self::FRAC_1_LN_2
+	}
 
-        x
-    }
+	pub fn log10(self) -> Self {
+		self.ln() * Self::FRAC_1_LN_10
+	}
 
-    pub fn log2(self) -> Self {
-        self.ln() * Self::FRAC_1_LN_2
-    }
+	pub fn trunc(self) -> Self {
+		let trunc = pick!(libm::trunc, f64::trunc);
+		let trunc = Self(trunc(self.0), trunc(self.1));
 
-    pub fn log10(self) -> Self {
-        self.ln() * Self::FRAC_1_LN_10
-    }
-
-    pub fn trunc(self) -> Self {
-        let trunc = pick!(libm::trunc, f64::trunc);
-        let trunc = Self(trunc(self.0), trunc(self.1));
-
-        if trunc.0 == self.0 {
-            trunc
-        } else {
-            Quad(trunc.0, 0.0)
-        }
-    }
+		if trunc.0 == self.0 { trunc } else { Quad(trunc.0, 0.0) }
+	}
 }
 
-impl Add for Quad {
-    type Output = Quad;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        self.add_accurate(rhs)
-    }
-}
-impl Add for &Quad {
-    type Output = Quad;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        self.add_accurate(*rhs)
-    }
-}
-
-impl Sub for Quad {
-    type Output = Quad;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.sub_accurate(rhs)
-    }
-}
-impl Sub for &Quad {
-    type Output = Quad;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.sub_accurate(*rhs)
-    }
-}
-
-impl Mul for Quad {
-    type Output = Quad;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        self.mul(rhs)
-    }
+macro_rules! impl_op {
+	({$(
+		impl $op:ident for $ty:ty {
+			fn $op_fn:ident($self:ident, $rhs:ident: Self) -> Self::Output $body:block
+		}
+	)*}) => {$(
+		impl $op for $ty {
+			type Output = $ty;
+			#[inline(always)]
+			fn $op_fn($self, $rhs: Self) -> Self::Output $body
+		}
+		impl $op<&$ty> for $ty {
+			type Output = $ty;
+			#[inline(always)]
+			fn $op_fn($self, $rhs: &$ty) -> Self::Output { let $rhs = *$rhs; $body}
+		}
+		impl $op<$ty> for &$ty {
+			type Output = $ty;
+			#[inline(always)]
+			fn $op_fn($self, $rhs: $ty) -> Self::Output $body
+		}
+		impl $op<&$ty> for &$ty {
+			type Output = $ty;
+			#[inline(always)]
+			fn $op_fn($self, $rhs: &$ty) -> Self::Output { let $rhs = *$rhs; $body}
+		}
+	)*};
 }
 
-impl Mul for &Quad {
-    type Output = Quad;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        (*self).mul(*rhs)
-    }
-}
-
-impl Div for Quad {
-    type Output = Quad;
-
-    fn div(self, rhs: Self) -> Self::Output {
-        self.div(rhs)
-    }
-}
-
-impl Div for &Quad {
-    type Output = Quad;
-
-    fn div(self, rhs: Self) -> Self::Output {
-        (*self).div(*rhs)
-    }
-}
-
-impl Rem for Quad {
-    type Output = Quad;
-
-    fn rem(self, rhs: Self) -> Self::Output {
-        self - (self / rhs).trunc() * rhs
-    }
-}
-
-impl Rem for &Quad {
-    type Output = Quad;
-
-    fn rem(self, rhs: Self) -> Self::Output {
-        (*self).rem(*rhs)
-    }
+macro_rules! impl_assign_op {
+	({$(
+		impl $op:ident for $ty:ty {
+			fn $op_fn:ident(&mut $self:ident, $rhs:ident: Self) $body:block
+		}
+	)*}) => {$(
+		impl $op for $ty {
+			#[inline(always)]
+			fn $op_fn(&mut $self, $rhs: Self) $body
+		}
+		impl $op<&$ty> for $ty {
+			#[inline(always)]
+			fn $op_fn(&mut $self, $rhs: &$ty) { let $rhs = *$rhs; $body}
+		}
+	)*};
 }
 
 impl Neg for Quad {
-    type Output = Quad;
+	type Output = Quad;
 
-    fn neg(self) -> Self::Output {
-        self.neg()
-    }
+	fn neg(self) -> Self::Output {
+		self.neg()
+	}
 }
 impl Neg for &Quad {
-    type Output = Quad;
+	type Output = Quad;
 
-    fn neg(self) -> Self::Output {
-        (*self).neg()
-    }
-}
-
-impl AddAssign for Quad {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs
-    }
-}
-impl AddAssign<&Quad> for Quad {
-    fn add_assign(&mut self, rhs: &Quad) {
-        *self = *self + *rhs
-    }
+	fn neg(self) -> Self::Output {
+		(*self).neg()
+	}
 }
 
-impl SubAssign for Quad {
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs
-    }
-}
-impl SubAssign<&Quad> for Quad {
-    fn sub_assign(&mut self, rhs: &Quad) {
-        *self = *self - *rhs
-    }
-}
+impl_op!({
+	impl Add for Quad {
+		fn add(self, rhs: Self) -> Self::Output {
+			self.add_estimate(rhs)
+		}
+	}
+	impl Sub for Quad {
+		fn sub(self, rhs: Self) -> Self::Output {
+			self.sub_estimate(rhs)
+		}
+	}
+	impl Mul for Quad {
+		fn mul(self, rhs: Self) -> Self::Output {
+			self.__mul__(rhs)
+		}
+	}
+	impl Div for Quad {
+		fn div(self, rhs: Self) -> Self::Output {
+			self.__div__(rhs)
+		}
+	}
+	impl Rem for Quad {
+		fn rem(self, rhs: Self) -> Self::Output {
+			self - (self / rhs).trunc() * rhs
+		}
+	}
+});
 
-impl MulAssign for Quad {
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs
-    }
-}
-impl MulAssign<&Quad> for Quad {
-    fn mul_assign(&mut self, rhs: &Quad) {
-        *self = *self * *rhs
-    }
-}
+impl_assign_op!({
+	impl AddAssign for Quad {
+		fn add_assign(&mut self, rhs: Self) {
+			*self = *self + rhs
+		}
+	}
+	impl SubAssign for Quad {
+		fn sub_assign(&mut self, rhs: Self) {
+			*self = *self - rhs
+		}
+	}
+	impl MulAssign for Quad {
+		fn mul_assign(&mut self, rhs: Self) {
+			*self = *self * rhs
+		}
+	}
+	impl DivAssign for Quad {
+		fn div_assign(&mut self, rhs: Self) {
+			*self = *self / rhs
+		}
+	}
+	impl RemAssign for Quad {
+		fn rem_assign(&mut self, rhs: Self) {
+			*self = *self % rhs
+		}
+	}
+});
 
-impl DivAssign for Quad {
-    fn div_assign(&mut self, rhs: Self) {
-        *self = *self / rhs
-    }
-}
-impl DivAssign<&Quad> for Quad {
-    fn div_assign(&mut self, rhs: &Quad) {
-        *self = *self / *rhs
-    }
-}
-
-impl RemAssign for Quad {
-    fn rem_assign(&mut self, rhs: Self) {
-        *self = *self % rhs
-    }
-}
-impl RemAssign<&Quad> for Quad {
-    fn rem_assign(&mut self, rhs: &Quad) {
-        *self = *self % *rhs
-    }
-}
 impl From<f64> for Quad {
-    #[inline(always)]
-    fn from(value: f64) -> Self {
-        Quad(value, 0.0)
-    }
+	#[inline(always)]
+	fn from(value: f64) -> Self {
+		Quad(value, 0.0)
+	}
 }
 
 impl num_traits::Zero for Quad {
-    fn zero() -> Self {
-        Self::ZERO
-    }
+	fn zero() -> Self {
+		Self::ZERO
+	}
 
-    fn is_zero(&self) -> bool {
-        *self == Self::ZERO
-    }
+	fn is_zero(&self) -> bool {
+		*self == Self::ZERO
+	}
 }
 
 impl num_traits::One for Quad {
-    fn one() -> Self {
-        Self::ONE
-    }
+	fn one() -> Self {
+		Self::ONE
+	}
 
-    fn is_one(&self) -> bool {
-        *self == Self::ONE
-    }
+	fn is_one(&self) -> bool {
+		*self == Self::ONE
+	}
 }
 impl num_traits::Num for Quad {
-    type FromStrRadixErr = num_traits::ParseFloatError;
+	type FromStrRadixErr = num_traits::ParseFloatError;
 
-    fn from_str_radix(str: &str, radix: u32) -> Result<Self, Self::FromStrRadixErr> {
-        let _ = str;
-        let _ = radix;
+	fn from_str_radix(str: &str, radix: u32) -> Result<Self, Self::FromStrRadixErr> {
+		let _ = str;
+		let _ = radix;
 
-        Err(num_traits::ParseFloatError {
-            kind: num_traits::FloatErrorKind::Invalid,
-        })
-    }
+		Err(num_traits::ParseFloatError {
+			kind: num_traits::FloatErrorKind::Invalid,
+		})
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn test_sqrt() {
-        let x = Quad(3.5, 0.0);
+	#[test]
+	fn test_sqrt() {
+		let x = Quad(3.5, 0.0);
 
-        let y = x.sqrt();
-        assert!(y * y - x < Quad::from(1e-30));
+		let y = x.sqrt();
+		assert!(y * y - x < Quad::from(1e-30));
 
-        const {
-            let x = Quad(2.0, 0.0);
-            let y = x.const_sqrt();
-            assert!((y.const_mul(y).sub_accurate(x).abs()).lt(Quad::from_f64(1e-30)));
-        };
-    }
+		const {
+			let x = Quad(2.0, 0.0);
+			let y = x.const_sqrt();
+			assert!((y.const_mul(y).sub_accurate(x).abs()).lt(Quad::from_f64(1e-30)));
+		};
+	}
 
-    #[test]
-    fn test_rem() {
-        let x = Quad::from(36.0) / Quad::from(10.0);
-        assert!((x % Quad::from(0.5) - Quad::from(10.0).recip()).abs() < Quad::from(1e-30));
-    }
+	#[test]
+	fn test_rem() {
+		let x = Quad::from(36.0) / Quad::from(10.0);
+		assert!((x % Quad::from(0.5) - Quad::from(10.0).recip()).abs() < Quad::from(1e-30));
+	}
 }
 
 unsafe impl<T: Zeroable> Zeroable for Quad<T> {}
