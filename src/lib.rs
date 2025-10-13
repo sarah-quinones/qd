@@ -142,6 +142,14 @@ impl Quad {
 	}
 
 	pub fn div(self, rhs: Self) -> Self {
+		self.__div__(rhs)
+	}
+
+	fn __mul__(self, rhs: Self) -> Self {
+		imp::mul(self, rhs)
+	}
+
+	fn __div__(self, rhs: Self) -> Self {
 		let mut quotient = Quad(self.0 / rhs.0, 0.0);
 		let mut r = self.sub_accurate(rhs.mul(quotient));
 		quotient.1 = r.0 / rhs.0;
@@ -152,14 +160,6 @@ impl Quad {
 		quotient = imp::quick_two_sum(quotient.0, quotient.1);
 		quotient = quotient.add_accurate(Quad(update, 0.0));
 		quotient
-	}
-
-	fn __mul__(self, rhs: Self) -> Self {
-		self.mul(rhs)
-	}
-
-	fn __div__(self, rhs: Self) -> Self {
-		self.div(rhs)
 	}
 
 	pub const fn eq(self, rhs: Self) -> bool {
