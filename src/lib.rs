@@ -393,15 +393,17 @@ macro_rules! impl_assign_op {
 impl Neg for Quad {
 	type Output = Quad;
 
+	#[inline(always)]
 	fn neg(self) -> Self::Output {
-		self.neg()
+		Quad(-self.0, -self.1)
 	}
 }
 impl Neg for &Quad {
 	type Output = Quad;
 
+	#[inline(always)]
 	fn neg(self) -> Self::Output {
-		(*self).neg()
+		Quad(-self.0, -self.1)
 	}
 }
 
