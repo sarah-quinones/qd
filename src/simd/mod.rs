@@ -13,8 +13,8 @@ fn quick_two_sum<S: Simd>(simd: S, large: S::f64s, small: S::f64s) -> Quad<S::f6
 #[inline(always)]
 fn two_sum<S: Simd>(simd: S, a: S::f64s, b: S::f64s) -> Quad<S::f64s> {
 	let gt = simd.greater_than_f64s(simd.abs_f64s(a), simd.abs_f64s(b));
-	let large = simd.select_f64s_m64s(gt, a, b);
-	let small = simd.select_f64s_m64s(gt, b, a);
+	let large = simd.select_f64s(gt, a, b);
+	let small = simd.select_f64s(gt, b, a);
 	quick_two_sum(simd, large, small)
 }
 
@@ -120,8 +120,8 @@ pub fn mul<S: Simd>(simd: S, a: Quad<S::f64s>, b: Quad<S::f64s>) -> Quad<S::f64s
 #[inline(always)]
 pub fn select<S: Simd>(simd: S, mask: S::m64s, if_true: Quad<S::f64s>, if_false: Quad<S::f64s>) -> Quad<S::f64s> {
 	Quad(
-		simd.select_f64s_m64s(mask, if_true.0, if_false.0),
-		simd.select_f64s_m64s(mask, if_true.1, if_false.1),
+		simd.select_f64s(mask, if_true.0, if_false.0),
+		simd.select_f64s(mask, if_true.1, if_false.1),
 	)
 }
 
